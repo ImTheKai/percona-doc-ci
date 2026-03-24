@@ -1,0 +1,384 @@
+name: Run doc tests (reusable)
+
+# Reusable workflow — call this from any Percona doc repo.
+# It extracts shell/SQL blocks from a changed doc page, asks an LLM to
+# produce a runnable test script, and executes it — either on a GitHub
+# runner or as a Kubernetes Job on EKS with Karpenter.
+
+on:
+  workflow_call:
+    inputs:
+
+      # ── required ────────────────────────────────────────────────────────────
+      repo-name:
+        description: "Short repo name (e.g. postgresql-docs). Used in job labels."
+        required: true
+        type: string
+
+      doc-path:
+        description: "Repo-relative path to the doc page to test (e.g. docs/quick-start.md)."
+        required: true
+        type: string
+
+      # ── optional ────────────────────────────────────────────────────────────
+      variables-file:
+        description: "Path to Jinja2 variables file (relative to repo root)."
+        required: false
+        type: string
+        default: "variables.yml"
+
+      runner-type:
+        description: |
+          Where to execute the generated test script.
+          "github"  — run directly on the GitHub-hosted ubuntu-latest runner (default, fast, free tier).
+          "k8s"     — submit a K8s Job to EKS; requires KUBECONFIG secret and a running Karpenter cluster.
+        required: false
+        type: string
+        default: "github"
+
+      k8s-namespace:
+        description: "K8s namespace for the Job (runner-type=k8s only)."
+        required: false
+        type: string
+        default: "doc-test"
+
+      use-percona-dk-sidecar:
+        description: |
+          Attach a percona-dk MCP sidecar to the K8s Job for cross-repo context.
+          Only meaningful when runner-type=k8s. Has no effect on GitHub runner.
+        required: false
+        type: boolean
+        default: false
+
+      percona-dk-image:
+        description: "Container image for the percona-dk sidecar (when use-percona-dk-sidecar=true)."
+        required: false
+        type: string
+        default: "ghcr.io/percona-lab/percona-dk:latest"
+
+      ai-provider:
+        description: |
+          Which LLM provider to use for test planning.
+          "anthropic" (default) — Claude via ANTHROPIC_API_KEY secret.
+          "github"              — GitHub Models via built-in GITHUB_TOKEN; no extra secret needed.
+          "openai"              — OpenAI via OPENAI_API_KEY secret.
+        required: false
+        type: string
+        default: "anthropic"
+
+      ai-model:
+        description: |
+          Override the default model for the chosen provider.
+          Defaults: anthropic=claude-sonnet-4-6, github=gpt-4o, openai=gpt-4o.
+          Maps to ANTHROPIC_MODEL / GITHUB_MODEL / OPENAI_MODEL env var.
+        required: false
+        type: string
+        default: ""
+
+      tooling-ref:
+        description: "Git ref of this (percona-doc-ci) repo to check out for tools."
+        required: false
+        type: string
+        default: "main"
+
+    secrets:
+      # All secrets are optional at declaration — the planner exits clearly if
+      # a required one is missing for the chosen provider.
+      ANTHROPIC_API_KEY:
+        required: false   # required when ai-provider=anthropic
+      OPENAI_API_KEY:
+        required: false   # required when ai-provider=openai
+      KUBECONFIG:
+        required: false   # required when runner-type=k8s
+      # GITHUB_TOKEN is automatic — no declaration needed.
+
+jobs:
+  plan:
+    name: "AI: plan test for ${{ inputs.doc-path }}"
+    runs-on: ubuntu-latest
+    outputs:
+      script-generated: ${{ steps.plan.outputs.script-generated }}
+      os-image: ${{ steps.plan.outputs.os-image }}
+
+    steps:
+      - name: Check out doc repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Check out percona-doc-ci tooling
+        uses: actions/checkout@v4
+        with:
+          repository: percona-lab/percona-doc-ci   # adjust to actual repo
+          ref: ${{ inputs.tooling-ref }}
+          path: _doc-ci-tools
+          # No token needed if the repo is public.
+
+      - name: Install pandoc
+        run: |
+          PANDOC_VER=3.1.9
+          wget -q "https://github.com/jgm/pandoc/releases/download/${PANDOC_VER}/pandoc-${PANDOC_VER}-1-amd64.deb"
+          sudo dpkg -i "pandoc-${PANDOC_VER}-1-amd64.deb"
+          pandoc --version | head -1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: _doc-ci-tools/tools/requirements.txt
+
+      - name: Install Python dependencies
+        run: pip install -r _doc-ci-tools/tools/requirements.txt
+
+      # ── Step 1: Jinja2 variable expansion ───────────────────────────────────
+      - name: Expand variables
+        id: expand
+        run: |
+          VARS_FILE="${{ inputs.variables-file }}"
+          DOC_FILE="${{ inputs.doc-path }}"
+
+          if [ -f "$VARS_FILE" ]; then
+            python _doc-ci-tools/tools/expand_vars.py "$DOC_FILE" "$VARS_FILE" > expanded_doc.md
+            echo "Variables expanded from $VARS_FILE"
+          else
+            cp "$DOC_FILE" expanded_doc.md
+            echo "No variables file found at $VARS_FILE — using doc as-is"
+          fi
+
+      # ── Step 2: Extract SHELL + SQL blocks via pandoc + Lua filter ───────────
+      - name: Extract code blocks
+        id: extract
+        run: |
+          pandoc -i expanded_doc.md \
+            --lua-filter _doc-ci-tools/tools/universal-extract.lua \
+            -t html -o /dev/null > extracted_blocks.txt 2>&1 || true
+
+          BLOCK_COUNT=$(grep -c "^#-----" extracted_blocks.txt || true)
+          echo "Extracted $BLOCK_COUNT block(s)"
+
+          if [ "$BLOCK_COUNT" -eq 0 ]; then
+            echo "::warning file=${{ inputs.doc-path }}::No runnable code blocks found — skipping test."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Step 3: AI generates runnable.sh + job.yaml ─────────────────────────
+      - name: Generate test script (AI)
+        id: plan
+        if: steps.extract.outputs.skip == 'false'
+        env:
+          AI_PROVIDER:       ${{ inputs.ai-provider }}
+          # Model override: set whichever env var matches the provider.
+          ANTHROPIC_MODEL:   ${{ inputs.ai-model }}
+          GITHUB_MODEL:      ${{ inputs.ai-model }}
+          OPENAI_MODEL:      ${{ inputs.ai-model }}
+          # Secrets — only the one matching the provider needs to be set.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
+          # GITHUB_TOKEN is injected automatically by GitHub Actions.
+        run: |
+          python _doc-ci-tools/tools/ai_test_planner.py \
+            expanded_doc.md \
+            extracted_blocks.txt \
+            "${{ inputs.repo-name }}" \
+            "${{ inputs.doc-path }}"
+
+          echo "script-generated=true" >> "$GITHUB_OUTPUT"
+
+          # Parse the OS image from job.yaml for downstream steps
+          OS_IMAGE=$(grep 'image:' job.yaml | head -1 | awk '{print $2}' | tr -d '"')
+          echo "os-image=${OS_IMAGE}" >> "$GITHUB_OUTPUT"
+
+          echo "--- Generated runnable.sh ---"
+          cat runnable.sh
+
+      - name: Upload generated artefacts
+        if: steps.plan.outputs.script-generated == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: doc-test-scripts
+          path: |
+            runnable.sh
+            job.yaml
+            expanded_doc.md
+            extracted_blocks.txt
+          retention-days: 7
+
+  # ── Execute on GitHub-hosted runner ─────────────────────────────────────────
+  execute-github:
+    name: "Execute on GitHub runner"
+    needs: plan
+    if: |
+      inputs.runner-type == 'github' &&
+      needs.plan.outputs.script-generated == 'true'
+    runs-on: ubuntu-latest
+    # Warn only — never block merge
+    continue-on-error: true
+
+    steps:
+      - name: Download generated scripts
+        uses: actions/download-artifact@v4
+        with:
+          name: doc-test-scripts
+
+      - name: Run doc test
+        id: run
+        run: |
+          chmod +x runnable.sh
+          ./runnable.sh
+        timeout-minutes: 15
+
+      - name: Post result as PR comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const outcome = '${{ steps.run.outcome }}';
+            const icon    = outcome === 'success' ? '✅' : '⚠️';
+            const status  = outcome === 'success' ? 'passed' : 'failed (non-blocking)';
+            const docPath = '${{ inputs.doc-path }}';
+            const body = [
+              `${icon} **Doc test ${status}** for \`${docPath}\``,
+              '',
+              outcome !== 'success'
+                ? '> Test failed but does **not** block merge. Check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.'
+                : '> All commands in the doc ran successfully.',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner:    context.repo.owner,
+              repo:     context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+  # ── Execute as Kubernetes Job (EKS + Karpenter) ──────────────────────────────
+  execute-k8s:
+    name: "Execute as K8s Job"
+    needs: plan
+    if: |
+      inputs.runner-type == 'k8s' &&
+      needs.plan.outputs.script-generated == 'true'
+    runs-on: ubuntu-latest
+    continue-on-error: true  # warn only
+
+    steps:
+      - name: Download generated scripts
+        uses: actions/download-artifact@v4
+        with:
+          name: doc-test-scripts
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          kubectl cluster-info
+
+      - name: Inject percona-dk sidecar (optional)
+        if: inputs.use-percona-dk-sidecar == true
+        run: |
+          # Patch job.yaml to add percona-dk as an init/sidecar container
+          python3 - <<'PY'
+          import yaml, sys
+
+          with open("job.yaml") as f:
+              job = yaml.safe_load(f)
+
+          sidecar = {
+              "name": "percona-dk",
+              "image": "${{ inputs.percona-dk-image }}",
+              "ports": [{"containerPort": 8000}],
+              "readinessProbe": {
+                  "httpGet": {"path": "/health", "port": 8000},
+                  "initialDelaySeconds": 5,
+                  "periodSeconds": 3,
+              },
+          }
+
+          containers = job["spec"]["template"]["spec"].setdefault("containers", [])
+          containers.append(sidecar)
+
+          # Tell test script where to reach percona-dk
+          envs = job["spec"]["template"]["spec"]["containers"][0].setdefault("env", [])
+          envs.append({"name": "PERCONA_DK_URL", "value": "http://localhost:8000"})
+
+          with open("job.yaml", "w") as f:
+              yaml.dump(job, f)
+
+          print("Sidecar injected")
+          PY
+
+      - name: Create namespace + ConfigMap
+        run: |
+          NS="${{ inputs.k8s-namespace }}-pr-${{ github.event.pull_request.number || github.run_number }}"
+          echo "NAMESPACE=$NS" >> "$GITHUB_ENV"
+
+          kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create configmap doc-test-script \
+            --from-file=runnable.sh \
+            -n "$NS" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Patch job namespace and submit
+        run: |
+          # Override namespace in generated job.yaml
+          python3 - <<PY
+          import yaml
+          with open("job.yaml") as f:
+              job = yaml.safe_load(f)
+          job.setdefault("metadata", {})["namespace"] = "${{ env.NAMESPACE }}"
+          with open("job.yaml", "w") as f:
+              yaml.dump(job, f)
+          PY
+
+          kubectl apply -f job.yaml
+
+      - name: Wait for Job completion
+        id: wait
+        run: |
+          JOB_NAME=$(kubectl get job -n "$NAMESPACE" -l percona.com/doc-test=true \
+                       -o jsonpath='{.items[0].metadata.name}')
+          echo "Waiting for job $JOB_NAME in namespace $NAMESPACE …"
+
+          kubectl wait "job/$JOB_NAME" \
+            --for=condition=complete \
+            --timeout=900s \
+            -n "$NAMESPACE" || {
+              echo "::warning::Job did not complete successfully"
+              kubectl logs -l "job-name=$JOB_NAME" -n "$NAMESPACE" --tail=100 || true
+              exit 1
+            }
+
+          kubectl logs -l "job-name=$JOB_NAME" -n "$NAMESPACE" --tail=200
+
+      - name: Cleanup namespace
+        if: always()
+        run: kubectl delete namespace "$NAMESPACE" --ignore-not-found
+
+      - name: Post result as PR comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const outcome = '${{ steps.wait.outcome }}';
+            const icon    = outcome === 'success' ? '✅' : '⚠️';
+            const status  = outcome === 'success' ? 'passed' : 'failed (non-blocking)';
+            const docPath = '${{ inputs.doc-path }}';
+            const ns      = process.env.NAMESPACE || 'doc-test';
+            const body = [
+              `${icon} **Doc test ${status}** for \`${docPath}\` (K8s runner, namespace \`${ns}\`)`,
+              '',
+              outcome !== 'success'
+                ? '> Test failed but does **not** block merge. Check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.'
+                : '> All commands in the doc ran successfully on the K8s runner.',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner:    context.repo.owner,
+              repo:     context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
