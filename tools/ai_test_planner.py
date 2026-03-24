@@ -99,7 +99,7 @@ Produce exactly two fenced code blocks with these exact language tags:
 6. Mount the test script from a ConfigMap named `doc-test-script`
    at `/test/runnable.sh`, command `["/bin/bash", "/test/runnable.sh"]`.
 7. Leave `namespace` as `doc-test` — the caller overrides it per PR.
-8. Name the job `doc-test-{slug}` where slug is the doc filename without extension,
+8. Name the job `doc-test-{{slug}}` where slug is the doc filename without extension,
    lowercased, hyphens only (e.g. `doc-test-quick-start`).
 9. Add label `percona.com/doc-test: "true"` for easy cleanup.
 
