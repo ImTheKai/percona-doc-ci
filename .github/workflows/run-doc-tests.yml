@@ -177,7 +177,7 @@ jobs:
           # Secrets — only the one matching the provider needs to be set.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
-          # GITHUB_TOKEN is injected automatically by GitHub Actions.
+          GITHUB_TOKEN:      ${{ github.token }}
         run: |
           python _doc-ci-tools/tools/ai_test_planner.py \
             expanded_doc.md \
