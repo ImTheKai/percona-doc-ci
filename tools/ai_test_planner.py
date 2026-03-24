@@ -85,9 +85,14 @@ Produce exactly two fenced code blocks with these exact language tags:
 8. Pass `-y` to all apt/yum/dnf commands.
 9. Do NOT include `sudo apt update` unless the page explicitly lists it.
 10. The script must be fully self-contained and idempotent where possible.
-11. After installing a PostgreSQL package, wait for the service to be ready
-    before running any psql commands:
-      until sudo -u postgres psql -c "SELECT 1" >/dev/null 2>&1; do sleep 1; done
+11. After installing a PostgreSQL package, explicitly start the service and
+    wait up to 30 seconds for it to be ready before running any psql commands:
+      sudo systemctl start postgresql
+      for i in $(seq 1 30); do
+        sudo -u postgres psql -c "SELECT 1" >/dev/null 2>&1 && break
+        echo "Waiting for PostgreSQL... ($i/30)"; sleep 1
+      done
+      sudo -u postgres psql -c "SELECT 1" >/dev/null 2>&1 || { echo "PostgreSQL did not start"; exit 1; }
 
 ### Rules for job.yaml
 
