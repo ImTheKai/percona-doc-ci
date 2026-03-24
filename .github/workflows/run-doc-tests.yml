@@ -109,7 +109,7 @@ jobs:
       - name: Check out percona-doc-ci tooling
         uses: actions/checkout@v4
         with:
-          repository: percona-lab/percona-doc-ci   # adjust to actual repo
+          repository: ImTheKai/percona-doc-ci
           ref: ${{ inputs.tooling-ref }}
           path: _doc-ci-tools
           # No token needed if the repo is public.
