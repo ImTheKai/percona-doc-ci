@@ -78,12 +78,11 @@ of it. That is the entire purpose of this pipeline.
 4. Convert any interactive commands to non-interactive equivalents:
    - `sudo -i -u postgres psql`  →  `sudo -u postgres psql <<'PSQL' ... PSQL`
    - `sudo -i -u postgres` then later `psql`  →  merge into single psql heredoc
-5. Put all consecutive SQL blocks into a single psql heredoc immediately following
-   the last related SHELL block, connected as postgres user.
-   Copy every SQL line into the heredoc EXACTLY as written — no reformatting,
-   no added column names, no changed SELECT expressions. SQL assertions must be
-   added as a SEPARATE psql heredoc after the main one, never by replacing
-   existing SQL commands.
+5. Where SQL blocks appear in the doc, insert this exact placeholder line and
+   nothing else — do NOT write any SQL yourself:
+     #SQL_PLACEHOLDER
+   The actual SQL will be injected verbatim by a post-processing step.
+   You may add a separate assertion heredoc AFTER the placeholder if useful.
 6. Skip blocks that are clearly showing expected output (not commands):
    - Blocks with no shell verbs (no `sudo`, `apt`, `wget`, `psql`, etc.)
    - Blocks that look like query result tables or log output
@@ -218,6 +217,31 @@ def parse_output(response: str) -> tuple[str, str]:
     return sh_match.group(1).strip(), yaml_match.group(1).strip()
 
 
+def extract_sql_lines(blocks_content: str) -> list[str]:
+    """Return SQL lines from extracted blocks, verbatim, skipping \q."""
+    lines, in_sql = [], False
+    for line in blocks_content.splitlines():
+        if line == "#-----SQL-----":
+            in_sql = True
+            continue
+        if line == "#-----SHELL-----":
+            in_sql = False
+            continue
+        if in_sql and line.strip() and not line.strip() == r"\q":
+            lines.append(line)
+    return lines
+
+
+def inject_sql(script: str, sql_lines: list[str]) -> str:
+    """Replace #SQL_PLACEHOLDER with a verbatim psql heredoc."""
+    if not sql_lines or "#SQL_PLACEHOLDER" not in script:
+        return script
+    heredoc = "sudo -u postgres psql <<'PSQL'\n"
+    heredoc += "\n".join(sql_lines) + "\n"
+    heredoc += "PSQL"
+    return script.replace("#SQL_PLACEHOLDER", heredoc)
+
+
 def main():
     if len(sys.argv) != 5:
         sys.exit(
@@ -236,6 +260,10 @@ def main():
     response = call_llm(doc_content, blocks_content, repo_name, rel_doc_path)
 
     script, job_yaml = parse_output(response)
+
+    # Inject SQL verbatim — never let the AI write SQL content
+    sql_lines = extract_sql_lines(blocks_content)
+    script = inject_sql(script, sql_lines)
 
     with open("runnable.sh", "w") as f:
         f.write(script + "\n")
