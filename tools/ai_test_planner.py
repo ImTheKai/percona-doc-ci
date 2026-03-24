@@ -78,11 +78,13 @@ of it. That is the entire purpose of this pipeline.
 4. Convert any interactive commands to non-interactive equivalents:
    - `sudo -i -u postgres psql`  →  `sudo -u postgres psql <<'PSQL' ... PSQL`
    - `sudo -i -u postgres` then later `psql`  →  merge into single psql heredoc
-5. Where SQL blocks appear in the doc, insert this exact placeholder line and
-   nothing else — do NOT write any SQL yourself:
+5. Where SQL blocks appear in the doc, write this exact line standalone (NOT
+   inside any heredoc or subshell — just a bare line in the script):
      #SQL_PLACEHOLDER
-   The actual SQL will be injected verbatim by a post-processing step.
-   You may add a separate assertion heredoc AFTER the placeholder if useful.
+   Do NOT open a psql heredoc yourself. Do NOT write any SQL. The actual SQL
+   and its psql heredoc wrapper are injected by a post-processing step.
+   Any assertions you want to add must go in a SEPARATE psql heredoc on a
+   line AFTER #SQL_PLACEHOLDER, never before or inside it.
 6. Skip blocks that are clearly showing expected output (not commands):
    - Blocks with no shell verbs (no `sudo`, `apt`, `wget`, `psql`, etc.)
    - Blocks that look like query result tables or log output
