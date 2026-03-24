@@ -67,13 +67,21 @@ Produce exactly two fenced code blocks with these exact language tags:
 
 ### Rules for runnable.sh
 
-CRITICAL: Copy every shell and SQL command EXACTLY as written in the extracted
-blocks — character for character, including any typos or errors. Do NOT fix,
-correct, or improve commands. If the doc has a bug, the test must fail because
-of it. That is the entire purpose of this pipeline.
+CRITICAL — verbatim commands: Copy every shell command EXACTLY as written in
+the extracted blocks, character for character, including any typos or errors.
+Do NOT fix, correct, or improve commands. If the doc has a bug, the test must
+fail because of that bug. That is the entire purpose of this pipeline.
+
+EXCEPTION — placeholders: If a command contains a value that is clearly meant
+to be replaced by the user (patterns like <hostname>, YOUR_PASSWORD, CHANGE_ME,
+<your-value>, etc.), substitute a safe, realistic test value instead of copying
+the placeholder literally. Prefer: host=localhost, port=3306, user=testuser,
+password=testpass123, database=testdb. Document the substitution in a comment.
+Note: Jinja2 variables like {{pgversion}} are already expanded before you see
+the blocks — if you still see double-braces, treat them as placeholders too.
 
 1. Start with `#!/bin/bash` and `set -euo pipefail`.
-2. Set `export DEBIAN_FRONTEND=noninteractive` near the top if apt is used.
+2. Export `DEBIAN_FRONTEND=noninteractive` when apt/apt-get is used.
 3. Run SHELL blocks in document order.
 4. Convert any interactive commands to non-interactive equivalents:
    - `sudo -i -u postgres psql`  →  `sudo -u postgres psql <<'PSQL' ... PSQL`
@@ -90,13 +98,16 @@ of it. That is the entire purpose of this pipeline.
    - Blocks that look like query result tables or log output
 7. Add one simple assertion after each significant step:
    - After package install:  `command -v psql >/dev/null`
-   - After DB/table create:  verify with a COUNT or `\\dt` inside the same psql heredoc
-   - After INSERT:           SELECT count(*) and grep for expected number
-8. Pass `-y` to all apt/yum/dnf commands.
-9. Do NOT include `sudo apt update` unless the page explicitly lists it.
-10. The script must be fully self-contained and idempotent where possible.
-11. After installing a PostgreSQL package, explicitly start the service and
-    wait up to 30 seconds for it to be ready before running any psql commands:
+   - After DB/table create:  verify with a COUNT or `\\dt` inside a separate heredoc
+   - After INSERT:           SELECT count(*) and check the result
+8. Add the non-interactive flag to package manager install/upgrade commands:
+   - apt / apt-get → add `-y`
+   - yum / dnf     → add `-y`
+   Do NOT add package index refresh commands (apt update, yum makecache, etc.)
+   unless the doc page explicitly lists them.
+9. The script must be fully self-contained.
+10. After installing a database server package, explicitly start the service and
+    wait up to 30 seconds for it to be ready before running client commands:
       sudo systemctl start postgresql
       for i in $(seq 1 30); do
         sudo -u postgres psql -c "SELECT 1" >/dev/null 2>&1 && break
