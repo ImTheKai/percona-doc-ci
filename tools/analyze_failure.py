@@ -14,27 +14,31 @@ Environment variables: same provider selection as ai_test_planner.py
 import os
 import sys
 
-PROMPT = """You are analyzing a failed automated doc test for Percona documentation.
+PROMPT = """You are reviewing a failed automated test for Percona documentation.
+Your job is to tell the documentation author what is wrong in their doc page.
 
 Doc page: {doc_path}
 
-The test script that ran:
+The verbatim commands extracted from the doc and executed:
 <script>
 {script}
 </script>
 
-The tail of the test log (last 100 lines):
+The test log:
 <log>
 {log}
 </log>
 
-In 3-5 sentences explain:
-1. What went wrong (the root cause, not just the error message)
-2. Which specific line in the doc or script caused the failure
-3. What needs to be fixed
-
-Be concrete and specific. Address the doc author, not a sysadmin.
-Format as plain markdown, no headers."""
+IMPORTANT RULES:
+- Ignore any issues with the CI scaffolding (heredocs, systemctl, sudo wrappers,
+  psql connection setup). Those are not the doc author's concern.
+- Focus ONLY on errors that come directly from the commands or SQL as written
+  in the documentation itself.
+- If the error is a typo or wrong command in the doc, say exactly what it is
+  and what it should be.
+- Be brief: 2-3 sentences maximum.
+- Address the doc author directly.
+- Format as plain markdown, no headers."""
 
 
 def call_llm(prompt: str) -> str:
@@ -78,14 +82,14 @@ def call_llm(prompt: str) -> str:
 
 def main():
     if len(sys.argv) != 4:
-        sys.exit(f"Usage: {sys.argv[0]} <log_file> <doc_path> <runnable_sh>")
+        sys.exit(f"Usage: {sys.argv[0]} <log_file> <doc_path> <extracted_blocks.txt>")
 
     log_path    = sys.argv[1]
     doc_path    = sys.argv[2]
-    script_path = sys.argv[3]
+    blocks_path = sys.argv[3]  # raw doc commands, not the CI wrapper
 
     with open(log_path)    as f: log    = f.read()
-    with open(script_path) as f: script = f.read()
+    with open(blocks_path) as f: script = f.read()
 
     # Trim log to last 100 lines to stay within token limits
     log_tail = "\n".join(log.splitlines()[-100:])

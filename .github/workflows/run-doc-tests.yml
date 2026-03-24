@@ -295,7 +295,7 @@ jobs:
           python _doc-ci-tools/tools/analyze_failure.py \
             test.log \
             "${{ inputs.doc-path }}" \
-            runnable.sh > failure_analysis.txt 2>/dev/null || \
+            extracted_blocks.txt > failure_analysis.txt 2>/dev/null || \
             echo "_AI analysis unavailable_" > failure_analysis.txt
           echo "analysis<<EOF" >> "$GITHUB_OUTPUT"
           cat failure_analysis.txt >> "$GITHUB_OUTPUT"
