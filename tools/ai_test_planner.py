@@ -133,7 +133,7 @@ def call_llm(doc_content: str, blocks_content: str, repo_name: str, doc_path: st
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             sys.exit("ANTHROPIC_API_KEY is not set")
-        model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+        model = os.environ.get("ANTHROPIC_MODEL") or "claude-sonnet-4-6"
         print(f"Provider: Anthropic ({model})", file=sys.stderr)
 
         client  = anthropic.Anthropic(api_key=api_key)
@@ -155,7 +155,7 @@ def call_llm(doc_content: str, blocks_content: str, repo_name: str, doc_path: st
         token = os.environ.get("GITHUB_TOKEN")
         if not token:
             sys.exit("GITHUB_TOKEN is not set (should be automatic in GitHub Actions)")
-        model = os.environ.get("GITHUB_MODEL", "gpt-4o")
+        model = os.environ.get("GITHUB_MODEL") or "gpt-4o"
         print(f"Provider: GitHub Models ({model})", file=sys.stderr)
 
         client   = OpenAI(base_url="https://models.inference.ai.azure.com", api_key=token)
@@ -176,7 +176,7 @@ def call_llm(doc_content: str, blocks_content: str, repo_name: str, doc_path: st
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             sys.exit("OPENAI_API_KEY is not set")
-        model = os.environ.get("OPENAI_MODEL", "gpt-4o")
+        model = os.environ.get("OPENAI_MODEL") or "gpt-4o"
         print(f"Provider: OpenAI ({model})", file=sys.stderr)
 
         client   = OpenAI(api_key=api_key)
