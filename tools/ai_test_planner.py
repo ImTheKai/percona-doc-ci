@@ -85,6 +85,9 @@ Produce exactly two fenced code blocks with these exact language tags:
 8. Pass `-y` to all apt/yum/dnf commands.
 9. Do NOT include `sudo apt update` unless the page explicitly lists it.
 10. The script must be fully self-contained and idempotent where possible.
+11. After installing a PostgreSQL package, wait for the service to be ready
+    before running any psql commands:
+      until sudo -u postgres psql -c "SELECT 1" >/dev/null 2>&1; do sleep 1; done
 
 ### Rules for job.yaml
 

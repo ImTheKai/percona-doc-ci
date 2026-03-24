@@ -223,6 +223,15 @@ jobs:
         with:
           name: doc-test-scripts
 
+      - name: Remove pre-installed PostgreSQL
+        # GitHub-hosted runners ship with a pgdg PostgreSQL that conflicts
+        # with Percona's packages. Remove it cleanly before the doc test runs.
+        run: |
+          sudo systemctl stop postgresql || true
+          sudo apt-get remove -y 'postgresql*' 'libpq-dev' || true
+          sudo apt-get autoremove -y || true
+          sudo rm -rf /var/lib/postgresql /etc/postgresql /var/run/postgresql
+
       - name: Run doc test
         id: run
         run: |
