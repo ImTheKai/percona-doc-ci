@@ -80,6 +80,10 @@ of it. That is the entire purpose of this pipeline.
    - `sudo -i -u postgres` then later `psql`  →  merge into single psql heredoc
 5. Put all consecutive SQL blocks into a single psql heredoc immediately following
    the last related SHELL block, connected as postgres user.
+   Copy every SQL line into the heredoc EXACTLY as written — no reformatting,
+   no added column names, no changed SELECT expressions. SQL assertions must be
+   added as a SEPARATE psql heredoc after the main one, never by replacing
+   existing SQL commands.
 6. Skip blocks that are clearly showing expected output (not commands):
    - Blocks with no shell verbs (no `sudo`, `apt`, `wget`, `psql`, etc.)
    - Blocks that look like query result tables or log output
