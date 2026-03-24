@@ -92,7 +92,7 @@ Produce exactly two fenced code blocks with these exact language tags:
         sudo -u postgres psql -c "SELECT 1" >/dev/null 2>&1 && break
         echo "Waiting for PostgreSQL... ($i/30)"; sleep 1
       done
-      sudo -u postgres psql -c "SELECT 1" >/dev/null 2>&1 || { echo "PostgreSQL did not start"; exit 1; }
+      sudo -u postgres psql -c "SELECT 1" >/dev/null 2>&1 || exit 1
 
 ### Rules for job.yaml
 
@@ -116,15 +116,12 @@ Respond with ONLY the two fenced code blocks. Nothing else.
 
 
 def _build_messages(doc_content: str, blocks_content: str, repo_name: str, doc_path: str):
-    return [{
-        "role": "user",
-        "content": USER_PROMPT_TEMPLATE.format(
-            repo_name=repo_name,
-            doc_path=doc_path,
-            doc_content=doc_content,
-            blocks_content=blocks_content,
-        )
-    }]
+    content = (USER_PROMPT_TEMPLATE
+               .replace("{repo_name}",     repo_name)
+               .replace("{doc_path}",      doc_path)
+               .replace("{doc_content}",   doc_content)
+               .replace("{blocks_content}", blocks_content))
+    return [{"role": "user", "content": content}]
 
 
 def call_llm(doc_content: str, blocks_content: str, repo_name: str, doc_path: str) -> str:
