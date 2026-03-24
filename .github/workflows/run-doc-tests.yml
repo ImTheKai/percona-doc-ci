@@ -194,6 +194,23 @@ jobs:
           echo "--- Generated runnable.sh ---"
           cat runnable.sh
 
+          # Verify the AI didn't silently fix commands.
+          # Every non-comment, non-empty line from extracted SHELL/SQL blocks
+          # must appear verbatim somewhere in runnable.sh.
+          echo "--- Verifying commands are verbatim ---"
+          FAIL=0
+          while IFS= read -r line; do
+            # Skip marker lines and blank lines
+            [[ "$line" =~ ^#-----.*-----$ ]] && continue
+            [[ -z "${line// }" ]] && continue
+            if ! grep -qF "$line" runnable.sh; then
+              echo "VERBATIM CHECK FAILED: this line from the doc is missing or altered in runnable.sh:"
+              echo "  >> $line"
+              FAIL=1
+            fi
+          done < extracted_blocks.txt
+          [ "$FAIL" -eq 0 ] || { echo "AI altered doc commands — aborting."; exit 1; }
+
       - name: Upload generated artefacts
         if: steps.plan.outputs.script-generated == 'true'
         uses: actions/upload-artifact@v4

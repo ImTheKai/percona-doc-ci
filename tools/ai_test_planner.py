@@ -67,6 +67,11 @@ Produce exactly two fenced code blocks with these exact language tags:
 
 ### Rules for runnable.sh
 
+CRITICAL: Copy every shell and SQL command EXACTLY as written in the extracted
+blocks — character for character, including any typos or errors. Do NOT fix,
+correct, or improve commands. If the doc has a bug, the test must fail because
+of it. That is the entire purpose of this pipeline.
+
 1. Start with `#!/bin/bash` and `set -euo pipefail`.
 2. Set `export DEBIAN_FRONTEND=noninteractive` near the top if apt is used.
 3. Run SHELL blocks in document order.
